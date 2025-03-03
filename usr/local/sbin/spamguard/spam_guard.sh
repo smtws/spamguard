@@ -26,6 +26,11 @@ generate_user_id() {
   echo "$USER"
 }
 
+# Add date and line numbers to log entries
+exec > >(awk '{ print strftime("%Y-%m-%d %H:%M:%S"), FNR": "$0 }' | tee -a "$LOG") 2>&1
+exec 2> >(awk '{ print strftime("%Y-%m-%d %H:%M:%S"), FNR": "$0 }' | tee -a "$LOG" >&2)
+echo "Running SpamGuard"
+
 # Process existing spam files on startup
 while IFS= read -r dir; do
   if [[ -d "$dir" ]]; then
@@ -39,15 +44,15 @@ while IFS= read -r dir; do
       # Ensure the staging directory exists
       if [[ ! -d "$STAGING_DIR" ]]; then
         mkdir -p "$STAGING_DIR"
-        echo "$(date): Created staging directory $STAGING_DIR" >> "$LOG"
+        echo "Created staging directory $STAGING_DIR"
       fi
 
       # Check if the file is already linked in the staging directory
       if [[ ! -e "$STAGING_DIR/$(basename "$spam_file")" ]]; then
-	setfacl -R -m u:spamguard:rwx "$dir"
-	setfacl -R -m d:u:spamguard:rwx "$dir"
-        echo "$(date): Creating hardlink for $spam_file" >> "$LOG"
-	ln -v "$spam_file" "$STAGING_DIR/$(basename "$spam_file")" >> "$LOG" 2>&1 || cp -v "$spam_file" "$STAGING_DIR/" >> "$LOG" 2>&1
+        setfacl -R -m u:spamguard:rwx "$dir"
+        setfacl -R -m d:u:spamguard:rwx "$dir"
+        echo "Creating hardlink for $spam_file"
+        ln -v "$spam_file" "$STAGING_DIR/$(basename "$spam_file")" || cp -v "$spam_file" "$STAGING_DIR/"
       fi
     done
   fi
@@ -65,18 +70,17 @@ while read -r file; do
   # Ensure the staging directory exists
   if [[ ! -d "$STAGING_DIR" ]]; then
     mkdir -p "$STAGING_DIR"
-    echo "$(date): Created staging directory $STAGING_DIR" >> "$LOG"
+    echo "Created staging directory $STAGING_DIR"
   fi
 
   # Handle create event
   if [[ -e "$file" ]]; then
     # Check if the file is already linked in the staging directory
     if [[ ! -e "$STAGING_DIR/$(basename "$file")" ]]; then
-      echo "$(date): Creating hardlink for $file" >> "$LOG"
-        setfacl -R -m u:spamguard:rwx "$(dirname "$file")"
-        setfacl -R -m d:u:spamguard:rwx "$(dirname "$file")"
-	ln -v "$spam_file" "$STAGING_DIR/$(basename "$spam_file")" >> "$LOG" 2>&1 || cp -v "$spam_file" "$STAGING_DIR/" >> "$LOG" 2>&1
-
+      echo "Creating hardlink for $file"
+      setfacl -R -m u:spamguard:rwx "$(dirname "$file")"
+      setfacl -R -m d:u:spamguard:rwx "$(dirname "$file")"
+      ln -v "$file" "$STAGING_DIR/$(basename "$file")" || cp -v "$file" "$STAGING_DIR/"
     fi
   else
     # Handle delete event
@@ -87,13 +91,13 @@ while read -r file; do
 
     # If a file is found in the staging, process it
     if [[ -f "$STAGING_FILE" ]]; then
-      echo "$(date): Processing $STAGING_FILE" >> "$LOG"      
+      echo "Processing $STAGING_FILE"
       # Check if the file already contains SpamAssassin headers
       if ! grep -q "X-Spam-Flag: YES" "$STAGING_FILE"; then
         # Pass the file to sa-learn if it does not have spam headers
-        sa-learn --spam "$STAGING_FILE" >> "$LOG" 2>&1
+        sa-learn --spam "$STAGING_FILE"
       else
-        echo "$(date): File $STAGING_FILE already contains Spam headers, skipping." >> "$LOG"
+        echo "File $STAGING_FILE already contains Spam headers, skipping."
       fi
 
       # Delete the hardlink
@@ -103,7 +107,7 @@ while read -r file; do
 
   # Check if the Maildir for the user still exists
   if [[ ! -d "/home/$USER/Maildir" ]]; then
-    echo "$(date): Maildir for $USER is missing, triggering update_spam_dirs." >> "$LOG"
+    echo "Maildir for $USER is missing, triggering update_spam_dirs."
 
     # Ensure update_spam_dirs does not run in parallel
     if [[ ! -f "$LOCKFILE" ]]; then
@@ -111,12 +115,12 @@ while read -r file; do
       /usr/local/sbin/spamguard/update_spam_dirs.sh
       rm -f "$LOCKFILE"
     else
-      echo "$(date): update_spam_dirs is already running, skipping." >> "$LOG"
+      echo "update_spam_dirs is already running, skipping."
     fi
 
     # Delete the mailbox directory from the staging and exit the loop
     rm -rf "$STAGING_DIR"
-    echo "$(date): Directory $STAGING_DIR deleted, exiting loop." >> "$LOG"
+    echo "Directory $STAGING_DIR deleted, exiting loop."
     break
   fi
 done
