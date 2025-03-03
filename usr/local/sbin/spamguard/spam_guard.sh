@@ -5,30 +5,31 @@ CONFIG="/etc/spamguard/spam_dirs.txt"
 STAGING_ROOT="/var/spam_processing"
 LOG="/var/log/spamguard.log"
 LOCKFILE="/var/run/spamguard_update.lock"
+USER="spamguard"
 
 # Function to generate user ID (considering sub-users)
 generate_user_id() {
   USER_PATH="$1"
 
   # Check if a sub-user exists
-  if [[ "$USER_PATH" =~ /home/([^/]+)/homes/([^/]+)/Maildir ]]; then
+  if [[ "$user_PATH" =~ /home/([^/]+)/homes/([^/]+)/Maildir ]]; then
     # If a sub-user exists, extract the sub-user
     USER="${BASH_REMATCH[2]}"
-  elif [[ "$USER_PATH" =~ /home/([^/]+)/Maildir ]]; then
+  elif [[ "$user_PATH" =~ /home/([^/]+)/Maildir ]]; then
     # Otherwise, extract the main user
     USER="${BASH_REMATCH[1]}"
   else
-    echo "Invalid path: $USER_PATH"
+    echo "Invalid path: $user_PATH"
     exit 1
   fi
 
   # Return the user ID
-  echo "$USER"
+  echo "$user"
 }
 
 # Add date and line numbers to log entries
-exec > >(awk '{ print strftime("%Y-%m-%d %H:%M:%S"), FNR": "$0 }' | tee -a "$LOG") 2>&1
-exec 2> >(awk '{ print strftime("%Y-%m-%d %H:%M:%S"), FNR": "$0 }' | tee -a "$LOG" >&2)
+exec > >(awk '{ print strftime("%Y-%m-%d %H:%M:%S"), $0 }' | tee -a "$LOG") 2>&1
+
 echo "Running SpamGuard"
 
 # Process existing spam files on startup
@@ -36,10 +37,10 @@ while IFS= read -r dir; do
   if [[ -d "$dir" ]]; then
     # Find spam files that are not yet in the staging directory
     find "$dir" -type f | while read -r spam_file; do
-      USER=$(generate_user_id "$spam_file")
+      user=$(generate_user_id "$spam_file")
 
       # Staging directory for the user
-      STAGING_DIR="$STAGING_ROOT/$USER"
+      STAGING_DIR="$STAGING_ROOT/$user"
 
       # Ensure the staging directory exists
       if [[ ! -d "$STAGING_DIR" ]]; then
@@ -49,11 +50,27 @@ while IFS= read -r dir; do
 
       # Check if the file is already linked in the staging directory
       if [[ ! -e "$STAGING_DIR/$(basename "$spam_file")" ]]; then
-        setfacl -R -m u:spamguard:rwx "$dir"
-        setfacl -R -m d:u:spamguard:rwx "$dir"
+        if ! getfacl "$dir" | grep -q "user:$USER:rwx"; then
+            echo "Set ACL for parent directory: $dir"
+            setfacl -R -m u:$USER:rwx "$dir"
+            setfacl -R -m d:u:$USER:rwx "$dir"
+            getfacl "$dir"
+            echo "Set ACL for parent directory: $dir EOF"
+        else
+            echo "ACL for $USER already exists on $dir"
+        fi
+        if ! getfacl "spam_file" | grep -q "user:$USER:rwx"; then
+            echo "Set ACL for: spam_file"
+            setfacl -m u:$USER:rwx "$spam_file"
+            getfacl "$spam_file"
+            echo "Set ACL for: $spam_file EOF"
+        else
+            echo "ACL for $USER already exists on $spam_file"
+        fi
         echo "Creating hardlink for $spam_file"
         ln -v "$spam_file" "$STAGING_DIR/$(basename "$spam_file")" || cp -v "$spam_file" "$STAGING_DIR/"
       fi
+
     done
   fi
 done < "$CONFIG"
@@ -65,7 +82,7 @@ while read -r file; do
   USER=$(generate_user_id "$file")
 
   # Staging directory for the user
-  STAGING_DIR="$STAGING_ROOT/$USER"
+  STAGING_DIR="$STAGING_ROOT/$user"
 
   # Ensure the staging directory exists
   if [[ ! -d "$STAGING_DIR" ]]; then
@@ -77,9 +94,20 @@ while read -r file; do
   if [[ -e "$file" ]]; then
     # Check if the file is already linked in the staging directory
     if [[ ! -e "$STAGING_DIR/$(basename "$file")" ]]; then
-      echo "Creating hardlink for $file"
-      setfacl -R -m u:spamguard:rwx "$(dirname "$file")"
-      setfacl -R -m d:u:spamguard:rwx "$(dirname "$file")"
+if ! getfacl "$(dirname "$file")" | grep -q "user:$USER:rwx"; then
+      setfacl -R -m u:$USER:rwx "$(dirname "$file")"
+      setfacl -R -m d:u:$USER:rwx "$(dirname "$file")"
+else
+  echo "ACL for $USER already exists on $(dirname "$file")"
+fi
+if ! getfacl "$file" | grep -q "user:$USER:rwx"; then
+      setfacl -m u:$USER:rwx "$file"
+else
+  echo "ACL for $USER already exists on $file"
+fi
+
+
+
       ln -v "$file" "$STAGING_DIR/$(basename "$file")" || cp -v "$file" "$STAGING_DIR/"
     fi
   else
@@ -106,8 +134,8 @@ while read -r file; do
   fi
 
   # Check if the Maildir for the user still exists
-  if [[ ! -d "/home/$USER/Maildir" ]]; then
-    echo "Maildir for $USER is missing, triggering update_spam_dirs."
+  if [[ ! -d "/home/$user/Maildir" ]]; then
+    echo "Maildir for $user is missing, triggering update_spam_dirs."
 
     # Ensure update_spam_dirs does not run in parallel
     if [[ ! -f "$LOCKFILE" ]]; then

@@ -12,6 +12,8 @@ fi
 # User/Group
 groupadd -f --system spamguard
 useradd -r -s /bin/false -g spamguard spamguard 2>/dev/null || true
+usermod -aG dovecot spamguard
+
 
 setfacl -R -m u:spamguard:rwX /home &>/dev/null
 
