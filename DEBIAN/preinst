@@ -1,0 +1,14 @@
+#!/bin/bash
+
+# Check if systemd is the init system
+if [ "$(cat /proc/1/comm)" != "systemd" ]; then
+  echo "ERROR: Systemd is not the init system. This package requires systemd."
+  exit 1
+fi
+
+# Check if SpamAssassin is installed
+if ! command -v sa-learn >/dev/null 2>&1; then
+  echo "ERROR: SpamAssassin is not installed. Please install it first: sudo apt install spamassassin"
+  exit 1
+fi
+exit 0

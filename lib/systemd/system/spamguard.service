@@ -1,0 +1,19 @@
+[Unit]
+Description=SpamGuard Service
+After=postfix.service
+
+[Service]
+Type=simple
+User=spamguard
+Group=mail
+# Default: 6 hours (21600 seconds)
+Environment=UPDATE_INTERVAL=21600  
+ExecStart=/usr/local/sbin/spamguard/service_runner.sh
+Restart=always
+RestartSec=10
+StandardOutput=append:/var/log/spamguard.log
+StandardError=append:/var/log/spamguard.log
+
+[Install]
+WantedBy=multi-user.target
+

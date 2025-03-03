@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project-private xmlns="http://www.netbeans.org/ns/project-private/1">
+    <editor-bookmarks xmlns="http://www.netbeans.org/ns/editor-bookmarks/2" lastBookmarkId="0"/>
+    <open-files xmlns="http://www.netbeans.org/ns/projectui-open-files/2">
+        <group>
+            <file>file:/home/smt/Docker/spamguard/usr/local/sbin/spamguard/spam_guard.sh</file>
+            <file>file:/home/smt/Docker/spamguard/README.md</file>
+            <file>file:/home/smt/Docker/spamguard/lib/systemd/system/spamguard.service</file>
+            <file>file:/home/smt/Docker/spamguard/DEBIAN/postinst</file>
+            <file>file:/home/smt/Docker/spamguard/DEBIAN/control</file>
+            <file>file:/home/smt/Docker/spamguard/DEBIAN/preinst</file>
+            <file>file:/home/smt/Docker/spamguard/usr/local/sbin/spamguard/update_spam_dirs.sh</file>
+            <file>file:/home/smt/Docker/spamguard/lib/systemd/system/spamguard.timer</file>
+            <file>file:/home/smt/Docker/spamguard/etc/logrotate.d/spamguard</file>
+            <file>file:/home/smt/Docker/spamguard/usr/local/sbin/spamguard/mailbox_watcher.sh</file>
+        </group>
+    </open-files>
+</project-private>

@@ -1,0 +1,55 @@
+#!/bin/bash
+set -e
+
+# AppArmor - only run when available
+if command -v aa-complain >/dev/null 2>&1; then
+  aa-complain /etc/apparmor.d/*dovecot* || true
+  systemctl reload apparmor || true
+else
+  echo "AppArmor is not installed, skipping aa-complain"
+fi
+
+# User/Group
+groupadd -f --system spamguard
+useradd -r -s /bin/false -g spamguard spamguard 2>/dev/null || true
+
+setfacl -R -m u:spamguard:rwX /home &>/dev/null
+
+# Folders
+mkdir -p /var/spam_processing
+chown spamguard:spamguard /var/spam_processing
+chmod 1777 /var/spam_processing
+
+mkdir -p /etc/spamguard
+chown spamguard:spamguard /etc/spamguard
+chmod 664 /etc/spamguard
+
+
+LAST_RUN_FILE="/etc/spamguard/last_run"
+
+# Check if the last_run_timestamp file exists, if not create it with the initial value
+if [ ! -f "$LAST_RUN_FILE" ]; then
+    echo 0 > "$LAST_RUN_FILE"
+    chown spamguard:spamguard "$LAST_RUN_FILE"
+    chmod 755 "$LAST_RUN_FILE"
+fi
+
+# Optional: Set a default interval config (if not already set)
+CONFIG_FILE="/etc/spamguard/spamguard_config"
+if [ ! -f "$CONFIG_FILE" ]; then
+    echo "UPDATE_INTERVAL=21600" > "$CONFIG_FILE"  # default 6 hours if not set
+    chown spamguard:spamguard "$CONFIG_FILE"
+    chmod 755 "$CONFIG_FILE"
+fi
+
+# Log file setup
+touch /var/log/spamguard.log
+chown spamguard:spamguard /var/log/spamguard.log
+chmod 744 /var/log/spamguard.log
+echo 'Spam-Guard installed' >> /var/log/spamguard.log
+
+systemctl daemon-reload
+systemctl enable spamguard.service
+systemctl start spamguard.service
+
+

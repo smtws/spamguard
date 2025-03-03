@@ -1,0 +1,10 @@
+Package: SpamGuard
+Version: 0.0.1
+Section: admin
+Priority: optional
+Architecture: all
+Depends: bash, inotify-tools, acl
+Recommends: dovecot-core (>= 2.3.7)
+Pre-Depends: systemd, spamassassin
+Maintainer: Tordt Schmidt <info@smt-webservices.de>
+Description: SpamGuard Service for Spamassassin/Postfix

@@ -1,0 +1,38 @@
+#!/bin/bash
+set -e
+
+# Stop and disable the service if it's running
+if systemctl is-active --quiet spamguard.service; then
+    systemctl stop spamguard.service
+    systemctl disable spamguard.service
+fi
+
+if systemctl is-active --quiet spamguard.timer; then
+    systemctl stop spamguard.timer
+    systemctl disable spamguard.timer
+fi
+
+# Remove the spamguard user and group if they exist
+if id "spamguard" &>/dev/null; then
+    userdel spamguard
+fi
+
+if getent group "spamguard" &>/dev/null; then
+    groupdel spamguard
+fi
+
+# Remove directories and files if they exist
+if [ -d "/var/spam_processing" ]; then
+    rm -rf /var/spam_processing
+fi
+
+if [ -d "/etc/spamguard" ]; then
+    rm -rf /etc/spamguard
+fi
+
+if [ -f "/var/log/spamguard.log" ]; then
+    rm /var/log/spamguard.log
+fi
+
+# Done
+exit 0
