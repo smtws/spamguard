@@ -16,4 +16,3 @@ StandardError=append:/var/log/spamguard.log
 
 [Install]
 WantedBy=multi-user.target
-
