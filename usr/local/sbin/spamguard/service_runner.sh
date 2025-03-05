@@ -33,8 +33,8 @@ CURRENT_TIMESTAMP=$(date +%s)
 
 # Check if the last run was older than the update interval
 if (( CURRENT_TIMESTAMP - LAST_RUN_TIMESTAMP >= UPDATE_INTERVAL )); then
-    # Run the update_spam_dirs.sh script
-    /usr/local/sbin/spamguard/update_spam_dirs.sh
+    # Run the update_mail_dirs.sh script
+    /usr/local/sbin/spamguard/update_mail_dirs.sh
 
     # Update the timestamp of the last run
     echo "$CURRENT_TIMESTAMP" > "$LAST_RUN_FILE"

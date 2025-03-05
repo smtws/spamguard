@@ -97,26 +97,17 @@ find_mail_locations() {
 
 # Main process
 log 0 "Updating mail directory list"
-# Create temporary files
-tmp_raw=$(mktemp)
-tmp_dedup=$(mktemp)
-
-# Get the mail locations and remove duplicates
-find_mail_locations > "$tmp_raw"
-sort -u "$tmp_raw" > "$tmp_dedup"
+find_mail_locations > "$CONFIG.tmp"
 
 if [[ -f "$CONFIG" ]]; then
-    if ! diff -q "$CONFIG" "$tmp_dedup" >/dev/null 2>&1; then
+    if ! diff -q "$CONFIG" "$CONFIG.tmp" >/dev/null 2>&1; then
         log 0 "Mail directory list has changed"
-        mv "$tmp_dedup" "$CONFIG"
+        mv "$CONFIG.tmp" "$CONFIG"
     else
         log 5 "No changes in mail directory list"
-        rm "$tmp_dedup"
+        rm "$CONFIG.tmp"
     fi
 else
     log 0 "Creating initial mail directory list"
-    mv "$tmp_dedup" "$CONFIG"
+    mv "$CONFIG.tmp" "$CONFIG"
 fi
-
-# Cleanup
-rm -f "$tmp_raw"
