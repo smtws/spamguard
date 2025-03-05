@@ -15,7 +15,7 @@ useradd -r -s /bin/false -g spamguard spamguard 2>/dev/null || true
 usermod -aG dovecot spamguard
 
 
-setfacl -R -m u:spamguard:rwX /home &>/dev/null
+setfacl -R -m d:u:spamguard:rwX /home &>/dev/null
 
 # Folders
 mkdir -p /var/spam_processing
