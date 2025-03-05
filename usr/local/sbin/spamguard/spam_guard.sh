@@ -6,6 +6,36 @@ LOG="/var/log/spamguard.log"
 LOCKFILE="/var/run/spamguard_update.lock"
 USER="spamguard"
 SPAM_DIR_REGEX=".*(/(\.)?(spam|junk|junk[-._ ]*e[-._ ]*mail))"
+
+PIDFILE="/var/spam_processing/spamguard.pid"
+
+# PID locking function
+check_and_create_pid() {
+    if [ -f "$PIDFILE" ]; then
+        old_pid=$(cat "$PIDFILE")
+        if ps -p "$old_pid" > /dev/null 2>&1; then
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - Another instance is running with PID $old_pid"
+            exit 1
+        else
+            echo "$(date '+%Y-%m-%d %H:%M:%S') - Found stale PID file, removing"
+            rm -f "$PIDFILE"
+        fi
+    fi
+    echo $$ > "$PIDFILE"
+}
+
+# Cleanup function
+cleanup() {
+    rm -f "$PIDFILE"
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - Removed PID file"
+}
+
+# Set up trap for cleanup
+trap cleanup EXIT
+
+# Run PID check before proceeding
+check_and_create_pid
+
 exec > >(awk '{ print strftime("%Y-%m-%d %H:%M:%S"), $0 }' | tee -a "$LOG") 2>&1
 
 generate_user_id() {
