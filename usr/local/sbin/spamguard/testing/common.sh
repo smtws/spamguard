@@ -10,6 +10,9 @@
 LOG_LEVEL=5
 LOG_FILE="/var/log/sg_test.log"
 
+# Default base directory for mailbox search
+MAIL_BASE_DIR="${MAIL_BASE_DIR:-/home}"
+
 # Global Maildir path variants
 MAILDIR_PATHS=(
     "Maildir"           # Standard Maildir in home
@@ -57,7 +60,7 @@ is_valid_maildir() {
 
 # Find all Maildir-style mail directories under a path
 get_maildirs() {
-    local path="$1"
+    local path="${1:-$MAIL_BASE_DIR}"
     local result=()
     local dir
     
