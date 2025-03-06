@@ -60,30 +60,30 @@ is_valid_maildir() {
 
 # Find all Maildir-style mail directories under a path
 get_maildirs() {
-    local path="${1:-$MAIL_BASE_DIR}"
-    local result=()
-    local dir
+    local found_mailboxes=()
     
-    # Look for Maildir variants in the given path
-    for maildir_name in "${MAILDIR_PATHS[@]}"; do
-        if [[ -d "$path/$maildir_name" ]] && 
-           [[ -d "$path/$maildir_name/new" ]] && 
-           [[ -d "$path/$maildir_name/cur" ]]; then
-            result+=("$path/$maildir_name")
+    # First collect all mailboxes
+    while IFS=: read -r username _ uid _ _ homedir _; do
+        # Skip system users
+        if [[ "$uid" -lt 1000 ]] || [[ "$homedir" == "/nonexistent" ]] || [[ "$homedir" == "/dev/null" ]]; then
+            continue
         fi
-    done
+        
+        # Standardize username (convert @ to _)
+        local std_username="${username/@/_}"
+        
+        # Check standard Maildir locations
+        for maildir_path in "${MAILDIR_PATHS[@]}"; do
+            if [[ -d "$homedir/$maildir_path" ]] && is_valid_maildir "$homedir/$maildir_path"; then
+                found_mailboxes+=("$std_username:$homedir/$maildir_path")
+                break
+            fi
+        done
+    done < <(getent passwd)
     
-    # If we found any Maildirs, return them
-    if [[ ${#result[@]} -gt 0 ]]; then
-        printf '%s\n' "${result[@]}"
-        return 0
-    fi
-    
-    # Otherwise, look in subdirectories
-    for dir in "$path"/*/; do
-        [[ -d "$dir" ]] || continue
-        get_maildirs "$dir"
-    done
+    # Now output the collected mailboxes with logging
+    log 5 "[MAILDIR-1] Found ${#found_mailboxes[@]} mailboxes"
+    printf '%s\n' "${found_mailboxes[@]}"
 }
 
 # Set appropriate ACLs on a path
@@ -91,29 +91,29 @@ handle_permissions() {
     local path="$1"
     
     if [[ ! -e "$path" ]]; then
-        log 0 "Error: Path does not exist: $path"
+        log 0 "[PERM-ERR-1] Path does not exist: $path"
         return 1
-        fi
+    fi
 
     if ! getfacl "$path" 2>/dev/null | grep -q "user:$USER:rwx"; then
-        log 0 "Setting ACL for: $path"
+        log 5 "[PERM-1] Setting ACL for: $path"
         # Set ACL just for this directory/file
-        run_and_log 0 setfacl -m u:$USER:rwx "$path"
+        run_and_log 5 setfacl -m u:$USER:rwx "$path"
         # If it's a directory, set default ACLs
         if [[ -d "$path" ]]; then
-            run_and_log 0 setfacl -m d:u:$USER:rwx "$path"
+            run_and_log 5 setfacl -m d:u:$USER:rwx "$path"
             # Check if it's any of our Maildir variants
             local basename=$(basename "$path")
             if [[ " ${MAILDIR_PATHS[@]} " =~ " ${basename} " ]]; then
-                log 5 "Setting ACL for Maildir subdirectories"
-                run_and_log 0 setfacl -m u:$USER:rwx "$path/cur"
-                run_and_log 0 setfacl -m d:u:$USER:rwx "$path/cur"
-                run_and_log 0 setfacl -m u:$USER:rwx "$path/new"
-                run_and_log 0 setfacl -m d:u:$USER:rwx "$path/new"
+                log 5 "[PERM-2] Setting ACL for Maildir subdirectories"
+                run_and_log 5 setfacl -m u:$USER:rwx "$path/cur"
+                run_and_log 5 setfacl -m d:u:$USER:rwx "$path/cur"
+                run_and_log 5 setfacl -m u:$USER:rwx "$path/new"
+                run_and_log 5 setfacl -m d:u:$USER:rwx "$path/new"
             fi
         fi
-        run_and_log 5 getfacl "$path"
     else
-        log 5 "ACL for $USER already exists on $path"
+        log 5 "[PERM-3] ACL for $USER already exists on $path"
     fi
 }
+
