@@ -212,10 +212,7 @@ update_mailbox_watches() {
     done
     
     # Read and store all mailboxes first
-    declare -a mailbox_lines
-    while IFS= read -r line; do
-        mailbox_lines+=("$line")
-    done < <(get_maildirs)
+    mapfile -t mailbox_lines < <(get_maildirs)
     
     # Process stored mailboxes
     local mailbox_count=0
