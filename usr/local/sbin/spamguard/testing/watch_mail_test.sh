@@ -146,7 +146,9 @@ handle_watch_recovery() {
 # Update mailbox watches
 update_mailbox_watches() {
     log 0 "Checking for mailbox changes"
+    local username maildir
     while IFS=: read -r username maildir; do
+        if [[ -n "$maildir" ]]; then  # Only process if maildir is not empty
         handle_permissions "$maildir"
         if [[ ! -v MAILBOX_USERS[$username] ]]; then
             # New mailbox found
@@ -158,6 +160,7 @@ update_mailbox_watches() {
             log 0 "Mailbox path changed for $username: ${MAILBOX_USERS[$username]} -> $maildir"
             MAILBOX_USERS[$username]="$maildir"
             setup_mailbox_watches "$username" "$maildir"
+            fi
         fi
     done < <(get_maildirs)
 }
