@@ -86,7 +86,7 @@ handle_permissions() {
     if [[ ! -e "$path" ]]; then
         log 0 "Error: Path does not exist: $path"
         return 1
-    }
+        fi
 
     if ! getfacl "$path" 2>/dev/null | grep -q "user:$USER:rwx"; then
         log 0 "Setting ACL for: $path"
