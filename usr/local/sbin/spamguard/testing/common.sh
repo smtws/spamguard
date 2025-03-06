@@ -16,6 +16,8 @@ MAILDIR_PATHS=(
     ".mail"             # Hidden mail directory
     "Mail"              # Another common variant
 )
+# Common regex patterns
+SPAM_DIR_REGEX=".*(/(\.)?(spam|junk|junk[-._ ]*e[-._ ]*mail))"
 
 # Log a message with a specific log level
 log() {
@@ -42,6 +44,11 @@ run_and_log() {
     else
         "$@" >/dev/null 2>&1
     fi
+}
+# Check if a path is a valid Maildir
+is_valid_maildir() {
+    local dir="$1"
+    [[ -d "$dir" && -d "$dir/new" && -d "$dir/cur" && -d "$dir/tmp" ]]
 }
 
 # Find all Maildir-style mail directories under a path
