@@ -8,6 +8,7 @@
 # 4 = trace
 # 5 = trace with data dumps
 LOG_LEVEL=5
+LOG_FILE="/var/log/sg_test.log"
 
 # Global Maildir path variants
 MAILDIR_PATHS=(
@@ -26,7 +27,7 @@ log() {
     local message="$*"
     
     if [[ $level -le $LOG_LEVEL ]]; then
-        echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message"
+        echo "$(date '+%Y-%m-%d %H:%M:%S') [$level] $message" >> "$LOG_FILE"
     fi
 }
 
@@ -38,13 +39,16 @@ run_and_log() {
     
     log "$level" "Running: $command"
     if [[ $level -le $LOG_LEVEL ]]; then
-        "$@" 2>&1 | while read line; do
+        local output
+        output=$("$@" 2>&1)
+        while IFS= read -r line; do
             log "$level" "$line"
-        done
+        done <<< "$output"
     else
         "$@" >/dev/null 2>&1
     fi
 }
+
 # Check if a path is a valid Maildir
 is_valid_maildir() {
     local dir="$1"

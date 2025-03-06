@@ -6,7 +6,13 @@ DEBUG=5
 
 # Source common functions and configurations
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
-source "$SCRIPT_DIR/../usr/local/sbin/spamguard/common.sh"
+source "$SCRIPT_DIR/common.sh"
+
+# Ensure log file exists and is writable
+touch "$LOG_FILE" 2>/dev/null || {
+    echo "Error: Cannot create or access log file at $LOG_FILE" >&2
+    exit 1
+}
 
 # Test data structures
 declare -A WATCH_PIDS        # Track watch processes
@@ -33,12 +39,19 @@ setup_mailbox_watches() {
     # Watch main Maildir
     if ! is_valid_maildir "$maildir"; then
         log 0 "Error: Invalid Maildir structure for $maildir"
+        handle_permissions "$maildir"
         return 1
     fi
+
+    # Set permissions for main Maildir and its subdirectories
+    handle_permissions "$maildir"
+    handle_permissions "$maildir/new"
+    handle_permissions "$maildir/cur"
 
     # Pipe for watch process communication
     local pipe="/tmp/watch_${username}_pipe"
     [[ -p "$pipe" ]] || mkfifo "$pipe"
+    handle_permissions "$pipe"
 
     # Start watch process with error redirection to pipe
     (
@@ -46,6 +59,7 @@ setup_mailbox_watches() {
         inotifywait -m -e create -e moved_to --format '%w%f' "${maildir}"/{new,cur} | while read file; do
             if [[ -f "$file" ]]; then
                 log 5 "INBOX: New file detected: $file for $username"
+                handle_permissions "$file"
             fi
         done
     ) &
@@ -62,8 +76,14 @@ setup_mailbox_watches() {
         
         if ! is_valid_maildir "$spam_dir"; then
             log 0 "Error: Invalid Maildir structure for spam dir $spam_dir"
+            handle_permissions "$spam_dir"
             continue
         fi
+        
+        # Set permissions for spam directory and its subdirectories
+        handle_permissions "$spam_dir"
+        handle_permissions "$spam_dir/new"
+        handle_permissions "$spam_dir/cur"
         
         # Start watch process with error redirection to pipe
         (
@@ -71,6 +91,7 @@ setup_mailbox_watches() {
             inotifywait -m -e create -e moved_to --format '%w%f' "${spam_dir}"/{new,cur} | while read file; do
                 if [[ -f "$file" ]]; then
                     log 5 "SPAM: New file detected: $file for $username"
+                    handle_permissions "$file"
                 fi
             done
         ) &
@@ -112,6 +133,7 @@ handle_watch_recovery() {
         local maildir="${MAILBOX_USERS[$username]}"
         if [[ -d "$maildir" ]]; then
             log 0 "Recovering watches for $username ($maildir)"
+            handle_permissions "$maildir"
             setup_mailbox_watches "$username" "$maildir"
         else
             log 0 "Mailbox no longer exists: $maildir"
@@ -125,6 +147,7 @@ handle_watch_recovery() {
 update_mailbox_watches() {
     log 0 "Checking for mailbox changes"
     while IFS=: read -r username maildir; do
+        handle_permissions "$maildir"
         if [[ ! -v MAILBOX_USERS[$username] ]]; then
             # New mailbox found
             log 0 "Found new mailbox: $username ($maildir)"
@@ -180,4 +203,4 @@ main() {
 # Run tests if not sourced
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     main "$@"
-fi  
+fi
