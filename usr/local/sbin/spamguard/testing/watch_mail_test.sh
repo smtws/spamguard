@@ -116,10 +116,15 @@ setup_mailbox_watches() {
         set +e
         # Ignore parent's signals
         trap '' SIGTERM SIGINT SIGHUP
-        while read -r error; do
-            log 0 "[WATCH-ERR-1] Watch error for $username: $error"
-            # Trigger watch recovery
-            kill -USR1 $$
+        while read -r message; do
+            # Filter out known inotifywait setup messages
+            if [[ "$message" != "Setting up watches." && "$message" != "Watches established." ]]; then
+                log 0 "[WATCH-ERR-1] Watch error for $username: $message"
+                # Trigger watch recovery for actual errors
+                kill -USR1 $$
+            else
+                log 5 "[WATCH-INFO-1] $username: $message"
+            fi
         done < "$pipe"
     ) &
     pid=$!
@@ -134,15 +139,45 @@ setup_mailbox_watches() {
 # Cleanup watches for a mailbox
 cleanup_mailbox_watches() {
     local username="$1"
+    local graceful="${2:-}"
+    local pids=()
+    
     log 0 "[CLEAN-1] Cleaning up watches for $username"
     for key in "${!WATCH_PIDS[@]}"; do
         if [[ $key == ${username}_* ]]; then
             log 5 "[CLEAN-2] Stopping watch $key (PID: ${WATCH_PIDS[$key]})"
-            kill ${WATCH_PIDS[$key]} 2>/dev/null || true
-            wait ${WATCH_PIDS[$key]} 2>/dev/null || true
+            if [[ "$graceful" == "graceful" ]]; then
+                kill -TERM ${WATCH_PIDS[$key]} 2>/dev/null || true
+                pids+=(${WATCH_PIDS[$key]})
+            else
+                kill -9 ${WATCH_PIDS[$key]} 2>/dev/null || true
+            fi
             unset WATCH_PIDS[$key]
         fi
     done
+    
+    if [[ "$graceful" == "graceful" ]]; then
+        # Wait for processes to finish (with timeout)
+        local timeout=5
+        local end=$((SECONDS + timeout))
+        while ((SECONDS < end)) && [ ${#pids[@]} -gt 0 ]; do
+            for pid in "${pids[@]}"; do
+                if ! kill -0 "$pid" 2>/dev/null; then
+                    pids=("${pids[@]/$pid}")
+                fi
+            done
+            sleep 0.1
+        done
+        
+        # Force kill any remaining processes
+        if [ ${#pids[@]} -gt 0 ]; then
+            log 0 "[CLEAN-ERR-1] Some processes for $username did not terminate gracefully, forcing..."
+            for pid in "${pids[@]}"; do
+                kill -9 "$pid" 2>/dev/null || true
+            done
+        fi
+    fi
+    
     # Clean up pipe
     log 5 "[CLEAN-3] Removing pipe for $username"
     rm -f "/tmp/watch_${username}_pipe"
@@ -220,18 +255,43 @@ update_mailbox_watches() {
 # Signal handlers
 cleanup_all() {
     log 0 "[EXIT-1] Received shutdown signal, cleaning up all watches..."
-    # Clean up the update timer first
+    local pids=()
+    
+    # First stop the update timer
     if [[ -v WATCH_PIDS["update_timer"] ]]; then
         log 5 "[EXIT-2] Stopping update timer (PID: ${WATCH_PIDS["update_timer"]})"
-        kill ${WATCH_PIDS["update_timer"]} 2>/dev/null || true
-        wait ${WATCH_PIDS["update_timer"]} 2>/dev/null || true
+        kill -TERM ${WATCH_PIDS["update_timer"]} 2>/dev/null || true
+        pids+=(${WATCH_PIDS["update_timer"]})
         unset WATCH_PIDS["update_timer"]
     fi
     
-    # Then clean up all mailbox watches
+    # Clean up all mailbox watches
     for username in "${!MAILBOX_USERS[@]}"; do
-        cleanup_mailbox_watches "$username"
+        cleanup_mailbox_watches "$username" "graceful"
     done
+    
+    # Wait for all processes to finish (with timeout)
+    local timeout=10
+    local end=$((SECONDS + timeout))
+    while ((SECONDS < end)) && [ ${#pids[@]} -gt 0 ]; do
+        for pid in "${pids[@]}"; do
+            if ! kill -0 "$pid" 2>/dev/null; then
+                pids=("${pids[@]/$pid}")
+            fi
+        done
+        sleep 0.1
+    done
+    
+    # Force kill any remaining processes
+    if [ ${#pids[@]} -gt 0 ]; then
+        log 0 "[EXIT-ERR-1] Some processes did not terminate gracefully, forcing..."
+        for pid in "${pids[@]}"; do
+            kill -9 "$pid" 2>/dev/null || true
+        done
+    fi
+    
+    # Final pipe cleanup
+    find /tmp -maxdepth 1 -name 'watch_*_pipe' -exec rm -f {} \;
     
     log 0 "[EXIT-3] Cleanup complete, exiting"
     exit 0
@@ -279,4 +339,3 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set +e
     main "$@"
 fi
-
