@@ -52,7 +52,7 @@ run_and_log() {
 # Check if a path is a valid Maildir
 is_valid_maildir() {
     local dir="$1"
-    [[ -d "$dir" && -d "$dir/new" && -d "$dir/cur" && -d "$dir/tmp" ]]
+    [[ -d "$dir" && -d "$dir/new" && -d "$dir/cur" ]]
 }
 
 # Find all Maildir-style mail directories under a path
