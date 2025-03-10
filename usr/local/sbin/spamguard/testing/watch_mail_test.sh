@@ -10,7 +10,7 @@ source "$SCRIPT_DIR/common.sh"
 
 # Ensure log file exists and is writable
 touch "$LOG_FILE" 2>/dev/null || {
-    log 0 "[INIT-ERR-1] Cannot create or access log file at $LOG_FILE"
+    log 0 "Cannot create or access log file at $LOG_FILE"
     exit 1
 }
 
@@ -23,7 +23,7 @@ UPDATE_INTERVAL=${UPDATE_INTERVAL:-21600}
 
 # Mock systemd functions for testing
 mock_systemd_notify() {
-    log 0 "[MOCK-1] systemd: $1"
+    log 0 "systemd: $1"
 }
 
 # Setup watches for a mailbox
@@ -31,14 +31,14 @@ setup_mailbox_watches() {
     local username="$1"
     local maildir="$2"
     
-    log 0 "[SETUP-1] Setting up watches for $username ($maildir)"
+    log 0 "Setting up watches for $username ($maildir)"
     
     # Clean up any existing watches for this mailbox
     cleanup_mailbox_watches "$username"
     
     # Watch main Maildir
     if ! is_valid_maildir "$maildir"; then
-        log 0 "[SETUP-ERR-1] Invalid Maildir structure for $maildir"
+        log 0 "Invalid Maildir structure for $maildir"
         handle_permissions "$maildir"
         return 1
     fi
@@ -60,7 +60,7 @@ setup_mailbox_watches() {
         exec 2>"$pipe"
         inotifywait -m -e create -e moved_to --format '%w%f' "${maildir}"/{new,cur} | while read file; do
             if [[ -f "$file" ]]; then
-                log 5 "[WATCH-1] INBOX: New file detected: $file for $username"
+                log 0 "INBOX: New file detected: $file for $username"
                 handle_permissions "$file"
 		mark_email_as "ham" "$file"
             fi
@@ -68,7 +68,7 @@ setup_mailbox_watches() {
     ) &
     local pid=$!
     WATCH_PIDS["${username}_inbox"]=$pid
-    log 5 "[SETUP-2] Started inbox watch for $username (PID: $pid)"
+    log 5 "Started inbox watch for $username (PID: $pid)"
     
     # Find and watch spam directories
     local spam_count=0
@@ -76,10 +76,10 @@ setup_mailbox_watches() {
         if [[ ! -d "$spam_dir" ]]; then
             continue
         fi
-        log 5 "[SETUP-3] Found spam dir: $spam_dir"
+        log 5 "Found spam dir: $spam_dir"
         
         if ! is_valid_maildir "$spam_dir"; then
-            log 0 "[SETUP-ERR-2] Invalid Maildir structure for spam dir $spam_dir"
+            log 0 "Invalid Maildir structure for spam dir $spam_dir"
             handle_permissions "$spam_dir"
             continue
         fi
@@ -97,7 +97,7 @@ setup_mailbox_watches() {
             exec 2>"$pipe"
             inotifywait -m -e create -e moved_to --format '%w%f' "${spam_dir}"/{new,cur} | while read file; do
                 if [[ -f "$file" ]]; then
-                    log 5 "[WATCH-2] SPAM: New file detected: $file for $username"
+                    log 0 "SPAM: New file detected: $file for $username"
                     handle_permissions "$file"
 		    mark_email_as "spam" "$file"
                 fi
@@ -105,28 +105,29 @@ setup_mailbox_watches() {
         ) &
         pid=$!
         WATCH_PIDS["${username}_spam_${spam_count}"]=$pid
-        log 5 "[SETUP-4] Started spam watch for $username on $spam_dir (PID: $pid)"
+        log 5 "Started spam watch for $username on $spam_dir (PID: $pid)"
         ((spam_count++))
     done < <(find "$maildir" -type d -regextype posix-extended -iregex "$SPAM_DIR_REGEX")
 
     # Monitor pipe for errors from any watch process
-    (
-        set +e
-        trap 'exit 0' SIGTERM SIGINT SIGHUP
-        while read -r message; do
+(
+    set +e
+    trap 'exit 0' SIGTERM SIGINT SIGHUP
+    while read -r message; do
         # Filter out known inotifywait setup messages
-            if [[ "$message" != "Setting up watches." && "$message" != "Watches established." ]]; then
-                log 0 "[WATCH-ERR-1] Watch error for $username: $message"
-            # Trigger watch recovery for actual errors
-                kill -USR1 $$
-            else
-                log 5 "[WATCH-INFO-1] $username: $message"
-            fi
-        done < "$pipe"
-    ) &
+        if [[ "$message" != "Setting up watches." && "$message" != "Watches established." ]]; then
+            log 0 " Watch error for $username: $message"
+            # Instead of full recovery, restart only the affected user's watch
+            cleanup_mailbox_watches "$username"
+            setup_mailbox_watches "$username" "$maildir"
+        else
+            log 5 "$username: $message"
+        fi
+    done < "$pipe"
+) &
     pid=$!
     WATCH_PIDS["${username}_monitor"]=$pid
-    log 5 "[SETUP-5] Setup complete for $username"
+    log 5 "Setup complete for $username"
 
     # Mark this mailbox as processed
     MAILBOX_USERS[$username]="$maildir"
@@ -140,7 +141,7 @@ cleanup_mailbox_watches() {
     
     if [[ -v WATCH_PIDS["${target}_inbox"] ]]; then
         local username="$target"
-        log 0 "[CLEAN-1] Cleaning up watches for $username (graceful=$graceful)"
+        log 0 "Cleaning up watches for $username (graceful=$graceful)"
         
         local pids_to_kill=()
         for key in "${!WATCH_PIDS[@]}"; do
@@ -155,16 +156,16 @@ cleanup_mailbox_watches() {
             cleanup_mailbox_watches "$pid" "$graceful"
         done
         
-        log 5 "[CLEAN-5] Removing pipe for $username"
+        log 5 "Removing pipe for $username"
         rm -f "/tmp/watch_${username}_pipe"
     else
         local pid="$target"
         local process_info=$(get_process_info "$pid")
         if [[ "$process_info" == "Process not found" ]]; then
-            log 5 "[CLEAN-INFO] Process $pid not found, skipping..."
+            log 5 "Process $pid not found, skipping..."
             return 0
         fi
-        log 5 "[CLEAN-2] Cleaning up process $pid (graceful=$graceful) - $process_info"
+        log 5 "Cleaning up process $pid (graceful=$graceful) - $process_info"
         
         local children=$(ps -o pid= --ppid "$pid" 2>/dev/null)
         
@@ -174,7 +175,7 @@ cleanup_mailbox_watches() {
         
         if [[ "$graceful" == "true" ]]; then
             if ps -p "$pid" > /dev/null 2>&1; then
-                log 5 "[CLEAN-3] Attempting graceful termination for PID: $pid - $process_info"
+                log 5 "Attempting graceful termination for PID: $pid - $process_info"
                 kill -TERM "$pid" 2>/dev/null || true
                 
                 local timeout=10
@@ -184,14 +185,14 @@ cleanup_mailbox_watches() {
                 done
             fi
             if kill -0 "$pid" 2>/dev/null; then
-                log 0 "[CLEAN-4] Graceful termination failed for PID: $pid - $process_info, forcing..."
+                log 0 "Graceful termination failed for PID: $pid - $process_info, forcing..."
                 cleanup_mailbox_watches "$pid" "false"
             else
-                log 5 "[CLEAN-5] Process $pid terminated gracefully - $process_info"
+                log 5 "Process $pid terminated gracefully - $process_info"
             fi
         else
             if ps -p "$pid" > /dev/null 2>&1; then
-                log 0 "[CLEAN-6] Force killing process $pid - $process_info"
+                log 0 "Force killing process $pid - $process_info"
                 kill -9 "$pid" 2>/dev/null || true
             fi
         fi
@@ -217,15 +218,15 @@ get_process_info() {
 # Watch recovery handler
 handle_watch_recovery() {
     local username
-    log 0 "[RECOVERY-1] Starting watch recovery"
+    log 0 "Starting watch recovery"
     for username in "${!MAILBOX_USERS[@]}"; do
         local maildir="${MAILBOX_USERS[$username]}"
         if [[ -d "$maildir" ]]; then
-            log 0 "[RECOVERY-2] Recovering watches for $username ($maildir)"
+            log 0 "Recovering watches for $username ($maildir)"
             handle_permissions "$maildir"
             setup_mailbox_watches "$username" "$maildir"
         else
-            log 0 "[RECOVERY-ERR-1] Mailbox no longer exists: $maildir"
+            log 0 "Mailbox no longer exists: $maildir"
             cleanup_mailbox_watches "$username"
             unset MAILBOX_USERS[$username]
         fi
@@ -234,7 +235,7 @@ handle_watch_recovery() {
 
 # Update mailbox watches
 update_mailbox_watches() {
-    log 0 "[UPDATE-1] Checking for mailbox changes"
+    log 0 "Checking for mailbox changes"
     
     declare -A current_mailboxes
     for username in "${!MAILBOX_USERS[@]}"; do
@@ -244,45 +245,45 @@ update_mailbox_watches() {
     mapfile -t mailbox_lines < <(get_maildirs)
     
     local mailbox_count=0
-    log 5 "[UPDATE-2] Processing ${#mailbox_lines[@]} mailboxes"
+    log 5 "Processing ${#mailbox_lines[@]} mailboxes"
     
     for line in "${mailbox_lines[@]}"; do
         IFS=: read -r username maildir <<< "$line"
         if [[ -n "$maildir" && -n "$username" ]]; then
 
-            log 5 "[UPDATE-3] Found mailbox: $username -> $maildir"
+            log 5 "Found mailbox: $username -> $maildir"
             ((mailbox_count++))
             
             if [[ -v current_mailboxes[$username] ]]; then
                 if [[ "${current_mailboxes[$username]}" != "$maildir" ]]; then
-                    log 0 "[UPDATE-4] Mailbox path changed for $username"
+                    log 0 "Mailbox path changed for $username"
                     setup_mailbox_watches "$username" "$maildir"
                 else
-                    log 5 "[UPDATE-5] Mailbox unchanged for $username"
+                    log 5 "Mailbox unchanged for $username"
                 fi
                 unset current_mailboxes[$username]
             else
-                log 0 "[UPDATE-6] New mailbox found for $username"
+                log 0 "New mailbox found for $username"
                 setup_mailbox_watches "$username" "$maildir"
             fi
         fi
     done
     
     for username in "${!current_mailboxes[@]}"; do
-        log 0 "[UPDATE-7] Removing watches for disappeared mailbox: $username"
+        log 0 "Removing watches for disappeared mailbox: $username"
         cleanup_mailbox_watches "$username"
         unset MAILBOX_USERS[$username]
     done
     
-    log 0 "[UPDATE-8] Mailbox check complete (processed $mailbox_count mailboxes)"
+    log 0 "Mailbox check complete (processed $mailbox_count mailboxes)"
 }
 
 # Signal handlers
 cleanup_all() {
-    log 0 "[EXIT-1] Received shutdown signal, cleaning up all watches..."
+    log 0 "Received shutdown signal, cleaning up all watches..."
     
     if [[ -v WATCH_PIDS["update_timer"] ]]; then
-        log 5 "[EXIT-2] Stopping update timer (PID: ${WATCH_PIDS["update_timer"]})"
+        log 5 "Stopping update timer (PID: ${WATCH_PIDS["update_timer"]})"
         kill -TERM ${WATCH_PIDS["update_timer"]} 2>/dev/null || true
         unset WATCH_PIDS["update_timer"]
     fi
@@ -293,16 +294,16 @@ cleanup_all() {
     
     local remaining_pids=$(ps -o pid= -g $$ | grep -v "^$$\$")
     if [[ -n "$remaining_pids" ]]; then
-        log 0 "[EXIT-3] Found remaining processes in our group, force killing..."
+        log 0 "Found remaining processes in our group, force killing..."
         for pid in $remaining_pids; do
-            log 0 "[EXIT-4] Force killing remaining process: $pid"
+            log 0 "Force killing remaining process: $pid"
             kill -9 "$pid" 2>/dev/null || true
         done
     fi
     
     find /tmp -maxdepth 1 -name 'watch_*_pipe' -exec rm -f {} \;
     
-    log 0 "[EXIT-5] Cleanup complete, exiting"
+    log 0 "Cleanup complete, exiting"
     exit 0
 }
 
@@ -312,7 +313,7 @@ mark_email_as() {
     local opposite_type=""
     local lock_file="/var/lock/$(basename "$email_file").lock"
     local sa_learn_pid=""
-    log 5 "[DEBUG] Entering mark_email_as: type_to_set=$type_to_set, email_file=$email_file"
+    log 5 "Entering mark_email_as: type_to_set=$type_to_set, email_file=$email_file"
 
     # Lock the file for the entire duration of processing
     exec 200>"$lock_file"
@@ -360,13 +361,13 @@ trap update_mailbox_watches SIGUSR2
 
 # Main test function
 main() {
-    log 0 "[MAIN-1] Starting watch_mail test"
+    log 0 "Starting watch_mail test"
     mock_systemd_notify "READY=1"
     
-    log 0 "[MAIN-2] Performing initial mailbox setup"
+    log 0 "Performing initial mailbox setup"
     update_mailbox_watches
     
-    log 0 "[MAIN-3] Setting up update timer"
+    log 0 "Setting up update timer"
     (
         set +e
         trap 'exit 0' SIGTERM SIGINT SIGHUP
@@ -376,7 +377,7 @@ main() {
         done
     ) &
     WATCH_PIDS["update_timer"]=$!
-    log 0 "[MAIN-4] Watch_mail test initialization complete"
+    log 0 "Watch_mail test initialization complete"
     
     while true; do
         sleep 60 &
