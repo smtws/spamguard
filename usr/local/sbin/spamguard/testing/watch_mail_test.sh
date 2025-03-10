@@ -314,9 +314,16 @@ mark_email_as() {
     local sa_learn_pid=""
     log 5 "[DEBUG] Entering mark_email_as: type_to_set=$type_to_set, email_file=$email_file"
 
+    # Lock the file for the entire duration of processing
+    exec 200>"$lock_file"
+    flock -x 200 || { log 5 "Failed to acquire lock for $email_file"; return 1; }
+    trap 'flock -u 200; exit' SIGTERM SIGINT SIGHUP
+
+    # Verify the file still exists after acquiring the lock
     if [[ ! -f "$email_file" ]]; then
-        log 5 "File $email_file is gone, exit."
-        return "0"
+        log 5 "File $email_file is gone after acquiring lock. Exit."
+        flock -u 200
+        return 0
     fi
     if [[ "$type_to_set" == "spam" ]]; then
         opposite_type="ham"
@@ -324,29 +331,27 @@ mark_email_as() {
         opposite_type="spam"
     else
         log 5 "INVALID email type, provide either ham or spam."
-        return "0"
+        flock -u 200
+        return 0
     fi
-    exec 200>"$lock_file"
-    flock -x 200 || exit 1 
-    trap 'flock -u 200; exit' SIGTERM SIGINT SIGHUP
     if getfattr -n "user.$type_to_set" -- "$email_file" &>/dev/null; then
-        log 5 "file $email_file has been learned before. exit."
-        flock -u 200  # Sperre freigeben, wenn nichts zu tun ist
-        return "0"
+        log 5 "File $email_file has been learned before. Exit."
+        flock -u 200  # Release lock if nothing to do
+        return 0
     fi
     if getfattr -n "user.$opposite_type" -- "$email_file" &>/dev/null; then
         setfattr -x "user.$opposite_type" "$email_file"
     fi
-    log 0 "Feeding $email_file to sa-learn as $type_to_set"    
+    log 0 "Feeding $email_file to sa-learn as $type_to_set"
 
     # Use run_and_log to execute sa-learn and log its output
     run_and_log 0 sa-learn --$type_to_set "$email_file"
+    sleep 3
 
     setfattr -n "user.$type_to_set" -v "1" "$email_file"
-    flock -u 200  
-return "0"
+    flock -u 200
+    return 0
 }
-
 
 # Set up signal handlers
 trap cleanup_all SIGTERM SIGINT SIGHUP
