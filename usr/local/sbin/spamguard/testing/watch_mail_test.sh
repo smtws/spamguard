@@ -55,16 +55,17 @@ setup_mailbox_watches() {
 
     # Start watch process with error redirection to pipe
     (
-    set +e
-    trap 'exit 0' SIGTERM SIGINT SIGHUP # Hier hinzugefügt
-    exec 2>"$pipe"
-    inotifywait -m -e create -e moved_to --format '%w%f' "${maildir}"/{new,cur} | while read file; do
-        if [[ -f "$file" ]]; then
-            log 5 "[WATCH-1] INBOX: New file detected: $file for $username"
-            handle_permissions "$file"
-        fi
-    done
-) &
+        set +e
+        trap 'exit 0' SIGTERM SIGINT SIGHUP
+        exec 2>"$pipe"
+        inotifywait -m -e create -e moved_to --format '%w%f' "${maildir}"/{new,cur} | while read file; do
+            if [[ -f "$file" ]]; then
+                log 5 "[WATCH-1] INBOX: New file detected: $file for $username"
+                handle_permissions "$file"
+		mark_email_as "ham" "$file"
+            fi
+        done
+    ) &
     local pid=$!
     WATCH_PIDS["${username}_inbox"]=$pid
     log 5 "[SETUP-2] Started inbox watch for $username (PID: $pid)"
@@ -90,15 +91,15 @@ setup_mailbox_watches() {
         
         # Start watch process with error redirection to pipe
         (
-            # Disable exit on error for the subshell
             set +e
             # Ignore parent's signals
-            trap '' SIGTERM SIGINT SIGHUP
+            trap 'exit 0' SIGTERM SIGINT SIGHUP
             exec 2>"$pipe"
             inotifywait -m -e create -e moved_to --format '%w%f' "${spam_dir}"/{new,cur} | while read file; do
                 if [[ -f "$file" ]]; then
                     log 5 "[WATCH-2] SPAM: New file detected: $file for $username"
                     handle_permissions "$file"
+		    mark_email_as "spam" "$file"
                 fi
             done
         ) &
@@ -110,19 +111,19 @@ setup_mailbox_watches() {
 
     # Monitor pipe for errors from any watch process
     (
-    set +e
-    trap 'exit 0' SIGTERM SIGINT SIGHUP # Hier hinzugefügt
-    while read -r message; do
+        set +e
+        trap 'exit 0' SIGTERM SIGINT SIGHUP
+        while read -r message; do
         # Filter out known inotifywait setup messages
-        if [[ "$message" != "Setting up watches." && "$message" != "Watches established." ]]; then
-            log 0 "[WATCH-ERR-1] Watch error for $username: $message"
+            if [[ "$message" != "Setting up watches." && "$message" != "Watches established." ]]; then
+                log 0 "[WATCH-ERR-1] Watch error for $username: $message"
             # Trigger watch recovery for actual errors
-            kill -USR1 $$
-        else
-            log 5 "[WATCH-INFO-1] $username: $message"
-        fi
-    done < "$pipe"
-) &
+                kill -USR1 $$
+            else
+                log 5 "[WATCH-INFO-1] $username: $message"
+            fi
+        done < "$pipe"
+    ) &
     pid=$!
     WATCH_PIDS["${username}_monitor"]=$pid
     log 5 "[SETUP-5] Setup complete for $username"
@@ -132,45 +133,87 @@ setup_mailbox_watches() {
     return 0
 }
 
-# Cleanup watches for a mailbox
+# Cleanup watches for a mailbox or a specific process
 cleanup_mailbox_watches() {
-    local username="$1"
-    local graceful="${2:-}"
-    local child_pid="${3:-}"
-
-    if [[ -z "$child_pid" ]]; then
-        # Process main process
+    local target="$1"
+    local graceful="${2:-true}"
+    
+    if [[ -v WATCH_PIDS["${target}_inbox"] ]]; then
+        local username="$target"
+        log 0 "[CLEAN-1] Cleaning up watches for $username (graceful=$graceful)"
+        
+        local pids_to_kill=()
         for key in "${!WATCH_PIDS[@]}"; do
             if [[ $key == ${username}_* ]]; then
                 local pid="${WATCH_PIDS[$key]}"
-                cleanup_mailbox_watches "$username" "$graceful" "$pid"
+                pids_to_kill+=("$pid")
+                unset WATCH_PIDS[$key]
             fi
         done
-        return
-    fi
-
-    # Get child processes
-    local child_pids=$(pgrep -P "$child_pid")
-
-    # Recursively kill child processes
-    for pid in $child_pids; do
-        cleanup_mailbox_watches "$username" "$graceful" "$pid"
-    done
-
-    # Kill the process
-    if [[ "$graceful" == "graceful" ]]; then
-        kill -TERM "$child_pid" 2>/dev/null || true
-    else
-        kill -9 "$child_pid" 2>/dev/null || true
-    fi
-
-    # Check if the process was a main process
-    if [[ " ${WATCH_PIDS[@]} " =~ " ${child_pid} " ]]; then
-        # Clean up pipe
-        log 5 "[CLEAN-3] Removing pipe for $username"
+        
+        for pid in "${pids_to_kill[@]}"; do
+            cleanup_mailbox_watches "$pid" "$graceful"
+        done
+        
+        log 5 "[CLEAN-5] Removing pipe for $username"
         rm -f "/tmp/watch_${username}_pipe"
+    else
+        local pid="$target"
+        local process_info=$(get_process_info "$pid")
+        if [[ "$process_info" == "Process not found" ]]; then
+            log 5 "[CLEAN-INFO] Process $pid not found, skipping..."
+            return 0
+        fi
+        log 5 "[CLEAN-2] Cleaning up process $pid (graceful=$graceful) - $process_info"
+        
+        local children=$(ps -o pid= --ppid "$pid" 2>/dev/null)
+        
+        for child in $children; do
+            cleanup_mailbox_watches "$child" "$graceful"
+        done
+        
+        if [[ "$graceful" == "true" ]]; then
+            if ps -p "$pid" > /dev/null 2>&1; then
+                log 5 "[CLEAN-3] Attempting graceful termination for PID: $pid - $process_info"
+                kill -TERM "$pid" 2>/dev/null || true
+                
+                local timeout=10
+                local end=$((SECONDS + timeout))
+                while ((SECONDS < end)) && kill -0 "$pid" 2>/dev/null; do
+                    sleep 0.1
+                done
+            fi
+            if kill -0 "$pid" 2>/dev/null; then
+                log 0 "[CLEAN-4] Graceful termination failed for PID: $pid - $process_info, forcing..."
+                cleanup_mailbox_watches "$pid" "false"
+            else
+                log 5 "[CLEAN-5] Process $pid terminated gracefully - $process_info"
+            fi
+        else
+            if ps -p "$pid" > /dev/null 2>&1; then
+                log 0 "[CLEAN-6] Force killing process $pid - $process_info"
+                kill -9 "$pid" 2>/dev/null || true
+            fi
+        fi
     fi
 }
+
+# Get process information (name and command)
+get_process_info() {
+    local pid="$1"
+    local info=""
+    
+    if ps -p "$pid" > /dev/null 2>&1; then
+        local process_name=$(ps -o comm= -p "$pid")
+        local process_cmd=$(ps -o args= -p "$pid")
+        info="Process: $process_name, Command: $process_cmd"
+    else
+        info="Process not found"
+    fi
+    
+    echo "$info"
+}
+
 # Watch recovery handler
 handle_watch_recovery() {
     local username
@@ -193,22 +236,20 @@ handle_watch_recovery() {
 update_mailbox_watches() {
     log 0 "[UPDATE-1] Checking for mailbox changes"
     
-    # Store current mailboxes for comparison
     declare -A current_mailboxes
     for username in "${!MAILBOX_USERS[@]}"; do
         current_mailboxes[$username]="${MAILBOX_USERS[$username]}"
     done
     
-    # Get mailboxes directly into array
     mapfile -t mailbox_lines < <(get_maildirs)
     
-    # Process stored mailboxes
     local mailbox_count=0
     log 5 "[UPDATE-2] Processing ${#mailbox_lines[@]} mailboxes"
     
     for line in "${mailbox_lines[@]}"; do
         IFS=: read -r username maildir <<< "$line"
         if [[ -n "$maildir" && -n "$username" ]]; then
+
             log 5 "[UPDATE-3] Found mailbox: $username -> $maildir"
             ((mailbox_count++))
             
@@ -227,7 +268,6 @@ update_mailbox_watches() {
         fi
     done
     
-    # Clean up removed mailboxes
     for username in "${!current_mailboxes[@]}"; do
         log 0 "[UPDATE-7] Removing watches for disappeared mailbox: $username"
         cleanup_mailbox_watches "$username"
@@ -240,47 +280,73 @@ update_mailbox_watches() {
 # Signal handlers
 cleanup_all() {
     log 0 "[EXIT-1] Received shutdown signal, cleaning up all watches..."
-    local pids=()
     
-    # First stop the update timer
     if [[ -v WATCH_PIDS["update_timer"] ]]; then
         log 5 "[EXIT-2] Stopping update timer (PID: ${WATCH_PIDS["update_timer"]})"
         kill -TERM ${WATCH_PIDS["update_timer"]} 2>/dev/null || true
-        pids+=(${WATCH_PIDS["update_timer"]})
         unset WATCH_PIDS["update_timer"]
     fi
     
-    # Clean up all mailbox watches
     for username in "${!MAILBOX_USERS[@]}"; do
-        cleanup_mailbox_watches "$username" "graceful"
+        cleanup_mailbox_watches "$username" "true"
     done
     
-    # Wait for all processes to finish (with timeout)
-    local timeout=10
-    local end=$((SECONDS + timeout))
-    while ((SECONDS < end)) && [ ${#pids[@]} -gt 0 ]; do
-        for pid in "${pids[@]}"; do
-            if ! kill -0 "$pid" 2>/dev/null; then
-                pids=("${pids[@]/$pid}")
-            fi
-        done
-        sleep 0.1
-    done
-    
-    # Force kill any remaining processes
-    if [ ${#pids[@]} -gt 0 ]; then
-        log 0 "[EXIT-ERR-1] Some processes did not terminate gracefully, forcing..."
-        for pid in "${pids[@]}"; do
+    local remaining_pids=$(ps -o pid= -g $$ | grep -v "^$$\$")
+    if [[ -n "$remaining_pids" ]]; then
+        log 0 "[EXIT-3] Found remaining processes in our group, force killing..."
+        for pid in $remaining_pids; do
+            log 0 "[EXIT-4] Force killing remaining process: $pid"
             kill -9 "$pid" 2>/dev/null || true
         done
     fi
     
-    # Final pipe cleanup
     find /tmp -maxdepth 1 -name 'watch_*_pipe' -exec rm -f {} \;
     
-    log 0 "[EXIT-3] Cleanup complete, exiting"
+    log 0 "[EXIT-5] Cleanup complete, exiting"
     exit 0
 }
+
+mark_email_as() {
+    local type_to_set=$1
+    local email_file=$2
+    local opposite_type=""
+    local lock_file="/var/lock/$(basename "$email_file").lock"
+    local sa_learn_pid=""
+    log 5 "[DEBUG] Entering mark_email_as: type_to_set=$type_to_set, email_file=$email_file"
+
+    if [[ ! -f "$email_file" ]]; then
+        log 5 "File $email_file is gone, exit."
+        return "0"
+    fi
+    if [[ "$type_to_set" == "spam" ]]; then
+        opposite_type="ham"
+    elif [[ "$type_to_set" == "ham" ]]; then
+        opposite_type="spam"
+    else
+        log 5 "INVALID email type, provide either ham or spam."
+        return "0"
+    fi
+    exec 200>"$lock_file"
+    flock -x 200 || exit 1 
+    trap 'flock -u 200; exit' SIGTERM SIGINT SIGHUP
+    if getfattr -n "user.$type_to_set" -- "$email_file" &>/dev/null; then
+        log 5 "file $email_file has been learned before. exit."
+        flock -u 200  # Sperre freigeben, wenn nichts zu tun ist
+        return "0"
+    fi
+    if getfattr -n "user.$opposite_type" -- "$email_file" &>/dev/null; then
+        setfattr -x "user.$opposite_type" "$email_file"
+    fi
+    log 0 "Feeding $email_file to sa-learn as $type_to_set"    
+
+    # Use run_and_log to execute sa-learn and log its output
+    run_and_log 0 sa-learn --$type_to_set "$email_file"
+
+    setfattr -n "user.$type_to_set" -v "1" "$email_file"
+    flock -u 200  
+return "0"
+}
+
 
 # Set up signal handlers
 trap cleanup_all SIGTERM SIGINT SIGHUP
@@ -292,24 +358,21 @@ main() {
     log 0 "[MAIN-1] Starting watch_mail test"
     mock_systemd_notify "READY=1"
     
-    # Initial setup of mailbox watches
     log 0 "[MAIN-2] Performing initial mailbox setup"
     update_mailbox_watches
     
-    # Set up periodic updates using a background timer
     log 0 "[MAIN-3] Setting up update timer"
-(
-    set +e
-    trap 'exit 0' SIGTERM SIGINT SIGHUP # Hier hinzugefügt
-    while true; do
-        sleep "$UPDATE_INTERVAL"
-        kill -USR2 $$
-    done
-) &
+    (
+        set +e
+        trap 'exit 0' SIGTERM SIGINT SIGHUP
+        while true; do
+            sleep "$UPDATE_INTERVAL"
+            kill -USR2 $$
+        done
+    ) &
     WATCH_PIDS["update_timer"]=$!
     log 0 "[MAIN-4] Watch_mail test initialization complete"
     
-    # Wait for signals while keeping track of processes
     while true; do
         sleep 60 &
         wait $!
@@ -318,8 +381,6 @@ main() {
 
 # Run tests if not sourced
 if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
-    # Disable exit on error for main script
     set +e
     main "$@"
 fi
-
