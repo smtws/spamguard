@@ -312,11 +312,7 @@ mark_email_as() {
     local email_file=$2
     local opposite_type=""
     log 5 "Entering mark_email_as: type_to_set=$type_to_set, email_file=$email_file"
-    # Verify the file still exists
-    if [[ ! -f "$email_file" ]]; then
-        log 0 "File $email_file has been removed. Skipping processing."
-        return 0
-    fi
+
     # Additional condition for spam type
     if [[ "$type_to_set" == "spam" ]]; then
         local x_spam_status=$(grep -i "^X-Spam-Status:" "$email_file")
@@ -332,23 +328,65 @@ mark_email_as() {
         return 0
     fi
     # Check if the file has already been learned
+email_file=$(resolve_maildir_filename "$email_file")
     if getfattr -n "user.$type_to_set" -- "$email_file" &>/dev/null; then
         log 0 "Email $email_file has already been learned as $type_to_set. Skipping processing."
         return 0
     fi
 
     # Remove the opposite type attribute if it exists
+email_file=$(resolve_maildir_filename "$email_file")
     if getfattr -n "user.$opposite_type" -- "$email_file" &>/dev/null; then
+email_file=$(resolve_maildir_filename "$email_file")
         setfattr -x "user.$opposite_type" "$email_file"
         log 5 "Removed user.$opposite_type attribute from $email_file."
     fi
     log 0 "Processing $email_file as $type_to_set."
     # Use run_and_log to execute sa-learn and log its output
-    run_and_log 0 sa-learn --$type_to_set "$email_file"
+    #run_and_log 0 sa-learn --$type_to_set "$email_file"
+email_file=$(resolve_maildir_filename "$email_file")
+    if ! run_and_log 0 sa-learn --$type_to_set "$email_file"; then
+        log 0 "Error processing $email_file with sa-learn. File may be inaccessible or corrupted."
+        return 0
+    fi
     # Set the attribute to mark the file as learned
-    setfattr -n "user.$type_to_set" -v "1" "$email_file"
+email_file=$(resolve_maildir_filename "$email_file")
+if setfattr -n "user.$type_to_set" -v "1" "$email_file" &>/dev/null; then
+ log 5 "Added user.$type_to_set attribute from $email_file."
+fi
     return 0
 }
+
+resolve_maildir_filename() {
+    local original_file="$1"
+    local maildir_path
+    local renamed_file
+
+    # If the file still exists, return it as-is
+    if [[ -f "$original_file" ]]; then
+        echo "$original_file"
+        return 0
+    fi
+
+    # Get the parent directory of the file
+    maildir_path="$(dirname "$original_file")"
+
+    # Look for a renamed version of the file
+    renamed_file=$(ls "$maildir_path"/$(basename "$original_file" | cut -d':' -f1)* 2>/dev/null | head -n1)
+
+    if [[ -n "$renamed_file" && -f "$renamed_file" ]]; then
+        log 0 "File $original_file was renamed to $renamed_file."
+        echo "$renamed_file"
+        return 0
+    fi
+
+    # If no renamed file is found, return nothing
+    log 0 "File $original_file can no longer be found at this path"
+    echo 0
+    return 0
+}
+
+
 
 # Set up signal handlers
 trap cleanup_all SIGTERM SIGINT SIGHUP
