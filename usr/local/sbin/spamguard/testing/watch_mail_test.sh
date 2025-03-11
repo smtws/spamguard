@@ -263,7 +263,7 @@ update_mailbox_watches() {
                 fi
                 unset current_mailboxes[$username]
             else
-                log 0 "New mailbox found for $username"
+                log 0 "Mailbox found for $username"
                 setup_mailbox_watches "$username" "$maildir"
             fi
         fi

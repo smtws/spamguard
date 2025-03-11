@@ -92,7 +92,7 @@ get_maildirs() {
     done < <(getent passwd)
     
     # Now output the collected mailboxes with logging
-    log 5 "Found ${#found_mailboxes[@]} unique mailboxes"
+    log 5 "Found ${#found_mailboxes[@]} mailboxes"
     printf '%s\n' "${found_mailboxes[@]}"
 }
 
