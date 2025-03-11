@@ -2,7 +2,7 @@
 set -e
 
 # Set debug level (0=INFO, 5=DEBUG)
-DEBUG=5
+DEBUG=0
 
 # Source common functions and configurations
 SCRIPT_DIR="$(dirname "$(realpath "$0")")"
@@ -311,46 +311,42 @@ mark_email_as() {
     local type_to_set=$1
     local email_file=$2
     local opposite_type=""
-    local lock_file="/var/lock/$(basename "$email_file").lock"
-    local sa_learn_pid=""
     log 5 "Entering mark_email_as: type_to_set=$type_to_set, email_file=$email_file"
-
-    # Lock the file for the entire duration of processing
-    exec 200>"$lock_file"
-    flock -x 200 || { log 5 "Failed to acquire lock for $email_file"; return 1; }
-    trap 'flock -u 200; exit' SIGTERM SIGINT SIGHUP
-
-    # Verify the file still exists after acquiring the lock
+    # Verify the file still exists
     if [[ ! -f "$email_file" ]]; then
-        log 5 "File $email_file is gone after acquiring lock. Exit."
-        flock -u 200
+        log 0 "File $email_file has been removed. Skipping processing."
         return 0
     fi
+    # Additional condition for spam type
     if [[ "$type_to_set" == "spam" ]]; then
+        local x_spam_status=$(grep -i "^X-Spam-Status:" "$email_file")
+        if [[ -n "$x_spam_status" && ! "$x_spam_status" =~ ^X-Spam-Status:\ No ]]; then
+            log 0 "Email $email_file was already marked as spam."
+            return 0
+        fi
         opposite_type="ham"
     elif [[ "$type_to_set" == "ham" ]]; then
         opposite_type="spam"
     else
-        log 5 "INVALID email type, provide either ham or spam."
-        flock -u 200
+        log 0 "Invalid email type provided: $type_to_set. Must be either 'ham' or 'spam'."
         return 0
     fi
+    # Check if the file has already been learned
     if getfattr -n "user.$type_to_set" -- "$email_file" &>/dev/null; then
-        log 5 "File $email_file has been learned before. Exit."
-        flock -u 200  # Release lock if nothing to do
+        log 0 "Email $email_file has already been learned as $type_to_set. Skipping processing."
         return 0
     fi
+
+    # Remove the opposite type attribute if it exists
     if getfattr -n "user.$opposite_type" -- "$email_file" &>/dev/null; then
         setfattr -x "user.$opposite_type" "$email_file"
+        log 5 "Removed user.$opposite_type attribute from $email_file."
     fi
-    log 0 "Feeding $email_file to sa-learn as $type_to_set"
-
+    log 0 "Processing $email_file as $type_to_set."
     # Use run_and_log to execute sa-learn and log its output
     run_and_log 0 sa-learn --$type_to_set "$email_file"
-    sleep 3
-
+    # Set the attribute to mark the file as learned
     setfattr -n "user.$type_to_set" -v "1" "$email_file"
-    flock -u 200
     return 0
 }
 
@@ -390,3 +386,4 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set +e
     main "$@"
 fi
+

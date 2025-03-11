@@ -7,7 +7,7 @@
 # 3 = debug
 # 4 = trace
 # 5 = trace with data dumps
-LOG_LEVEL=5
+LOG_LEVEL=${LOG_LEVEL:5}
 LOG_FILE="/var/log/sg_test.log"
 
 # Default base directory for mailbox search
