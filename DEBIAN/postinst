@@ -14,7 +14,6 @@ groupadd -f --system spamguard
 useradd -r -s /bin/false -g spamguard spamguard 2>/dev/null || true
 usermod -aG dovecot spamguard
 
-
 setfacl -R -m d:u:spamguard:rwX /home &>/dev/null
 
 # Folders
@@ -26,15 +25,6 @@ mkdir -p /etc/spamguard
 chown spamguard:spamguard /etc/spamguard
 chmod 664 /etc/spamguard
 
-
-LAST_RUN_FILE="/etc/spamguard/last_run"
-
-# Check if the last_run_timestamp file exists, if not create it with the initial value
-if [ ! -f "$LAST_RUN_FILE" ]; then
-    echo 0 > "$LAST_RUN_FILE"
-    chown spamguard:spamguard "$LAST_RUN_FILE"
-    chmod 755 "$LAST_RUN_FILE"
-fi
 
 # Optional: Set a default interval config (if not already set)
 CONFIG_FILE="/etc/spamguard/spamguard_config"
@@ -54,4 +44,10 @@ systemctl daemon-reload
 systemctl enable spamguard.service
 systemctl start spamguard.service
 
-
+# Set up cron job for sa-learn --rebuild if cron is available
+if command -v crontab >/dev/null 2>&1; then
+    (crontab -l 2>/dev/null; echo "0 0 * * 0 sa-learn --rebuild") | crontab -
+    echo "Added sa-learn --rebuild cron job."
+else
+    echo "Cron is not installed, skipping sa-learn --rebuild setup."
+fi
