@@ -23,6 +23,52 @@ MAILDIR_PATHS=(
 # Common regex patterns
 SPAM_DIR_REGEX=".*(/(\.)?(spam|junk|junk[-._ ]*e[-._ ]*mail))"
 
+TRASH_FOLDER_NAMES=(
+    "trash"
+    "deleted items"
+    "deleted messages"
+    "bin"
+    "wastebasket"
+    "inbox.trash"
+    "inbox.deleted"
+    "sent items"
+    "drafts"
+    "entwürfe"
+    "entw&apw-rfe"
+    "papierkorb"
+    "sent"	
+    "gesendet"
+)
+TRASH_REGEX="^($(printf "%s|" "${TRASH_FOLDER_NAMES[@]}" | sed 's/[.[\*^$(){}?+]/\\&/g' | sed 's/|$//'))$"
+export TRASH_REGEX
+
+is_trash_folder() {
+    local path="$1"
+    local folder_name
+
+    # Normalize the folder name
+    folder_name=$(basename "$path")                # Get the folder name
+    folder_name=${folder_name#.}                  # Remove leading dot
+    folder_name=${folder_name%/}                  # Remove trailing slash
+    folder_name=$(echo "$folder_name" | tr '[:upper:]' '[:lower:]')  # Convert to lowercase
+ folder_name=$(echo "$folder_name" | iconv -f iso-8859-1 -t utf-8//TRANSLIT 2>/dev/null)
+
+
+#   echo "Checking folder: $folder_name"
+
+    # Match against the regex
+if [[ "$folder_name" =~ $TRASH_REGEX ]]; then
+#        echo "Match found: $folder_name is a trash folder"
+        return 0
+    else
+ #       echo "No match found: $folder_name is not a trash folder"
+        return 1
+    fi
+}
+
+is_trash_folder_logic=$(declare -f is_trash_folder)
+
+
 # Log a message with a specific log level
 log() {
     local level="$1"
@@ -70,7 +116,7 @@ get_maildirs() {
             continue
         fi
         
-        # Normalize username consistently (@, -, and . to _)
+        # Standardize username (convert @ to _)
         local std_username="${username//@/_}"
         std_username="${std_username//-/_}"
         std_username="${std_username//./_}"
@@ -80,11 +126,11 @@ get_maildirs() {
             if [[ -d "$homedir/$maildir_path" ]] && is_valid_maildir "$homedir/$maildir_path"; then
                 # Only add if we haven't seen this normalized username before
                 if [[ -z "${seen_users[$std_username]}" ]]; then
-                    found_mailboxes+=("$std_username:$homedir/$maildir_path")
+                found_mailboxes+=("$std_username:$homedir/$maildir_path")
                     seen_users[$std_username]="$homedir/$maildir_path"
                     log 5 "Added mailbox for $username (as $std_username)"
                 else
-                    log 5 "Skipping duplicate mailbox for $username (as $std_username)"
+                    log 5 "Skipping duplicate $username for mailbox (as $std_username)"
                 fi
                 break
             fi
@@ -108,18 +154,18 @@ handle_permissions() {
     if ! getfacl "$path" 2>/dev/null | grep -q "user:$USER:rwx"; then
         log 5 "Setting ACL for: $path"
         # Set ACL just for this directory/file
-        run_and_log 5 setfacl -m u:$USER:rwx "$path"
+        run_and_log 5  setfacl -m u:$USER:rwx "$path"
         # If it's a directory, set default ACLs
         if [[ -d "$path" ]]; then
-            run_and_log 5 setfacl -m d:u:$USER:rwx "$path"
+            run_and_log 5  setfacl -m d:u:$USER:rwx "$path"
             # Check if it's any of our Maildir variants
             local basename=$(basename "$path")
             if [[ " ${MAILDIR_PATHS[@]} " =~ " ${basename} " ]]; then
                 log 5 "Setting ACL for Maildir subdirectories"
-                run_and_log 5 setfacl -m u:$USER:rwx "$path/cur"
-                run_and_log 5 setfacl -m d:u:$USER:rwx "$path/cur"
-                run_and_log 5 setfacl -m u:$USER:rwx "$path/new"
-                run_and_log 5 setfacl -m d:u:$USER:rwx "$path/new"
+                run_and_log 5  setfacl -m u:$USER:rwx "$path/cur"
+                run_and_log 5  setfacl -m d:u:$USER:rwx "$path/cur"
+                run_and_log 5  setfacl -m u:$USER:rwx "$path/new"
+                run_and_log 5  setfacl -m d:u:$USER:rwx "$path/new"
             fi
         fi
     else

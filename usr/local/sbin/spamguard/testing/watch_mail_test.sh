@@ -45,86 +45,65 @@ setup_mailbox_watches() {
 
     # Set permissions for main Maildir and its subdirectories
     handle_permissions "$maildir"
-    handle_permissions "$maildir/new"
-    handle_permissions "$maildir/cur"
-
+    # Handle permissions for the main Maildir and all subdirectories' cur/new directories
+    while IFS= read -r dir; do
+        handle_permissions "$dir"
+    done < <(find "$maildir" -type d \( -name cur -o -name new \) -exec dirname {} \;)
+    log 0 "$watch_dirs"
     # Pipe for watch process communication
     local pipe="/tmp/watch_${username}_pipe"
     [[ -p "$pipe" ]] || mkfifo "$pipe"
     handle_permissions "$pipe"
 
-    # Start watch process with error redirection to pipe
+    # Start a single inotifywait process to monitor both main and subdirectories
     (
         set +e
         trap 'exit 0' SIGTERM SIGINT SIGHUP
         exec 2>"$pipe"
-        inotifywait -m -e create -e moved_to --format '%w%f' "${maildir}"/{new,cur} | while read file; do
-            if [[ -f "$file" ]]; then
-                log 0 "INBOX: New file detected: $file for $username"
-                handle_permissions "$file"
-		mark_email_as "ham" "$file"
+find "$maildir" -type d \
+    -exec bash -c "
+        $is_trash_folder_logic
+        [ -d \"\$0/cur\" ] && [ -d \"\$0/new\" ] && ! is_trash_folder \"\$0\" && printf '%s\0%s\0' \"\$0/cur\" \"\$0/new\"
+    " {} \; | xargs -0 inotifywait -m -e create -e moved_to --format '%w%f' | while read -r file; do
+              if [[ -f "$file" ]]; then
+                # Determine if the file is in a spam directory
+		parent_dir=$(dirname "$file")
+               parent_dir=$(dirname "$parent_dir")
+parent_dir=$(echo "$parent_dir" | tr '[:upper:]' '[:lower:]')
+                if [[ "$parent_dir" =~ $SPAM_DIR_REGEX ]]; then
+                    log 0 "SPAM file detected: $file for $username"
+                    handle_permissions "$file"
+                    mark_email_as "spam" "$file"
+elif is_trash_folder "$parent_dir"; then
+    log 0 "File is in a trash folder: $file for $username. Skipping processing."
+                else
+                    log 0 "HAM file detected: $file for $username"
+                    handle_permissions "$file"
+                    mark_email_as "ham" "$file"
+                fi
             fi
         done
     ) &
     local pid=$!
-    WATCH_PIDS["${username}_inbox"]=$pid
-    log 5 "Started inbox watch for $username (PID: $pid)"
+    WATCH_PIDS["${username}_mailbox"]=$pid
+    log 5 "Started mailbox watch for $username (PID: $pid)"
     
-    # Find and watch spam directories
-    local spam_count=0
-    while IFS= read -r spam_dir; do
-        if [[ ! -d "$spam_dir" ]]; then
-            continue
-        fi
-        log 5 "Found spam dir: $spam_dir"
-        
-        if ! is_valid_maildir "$spam_dir"; then
-            log 0 "Invalid Maildir structure for spam dir $spam_dir"
-            handle_permissions "$spam_dir"
-            continue
-        fi
-        
-        # Set permissions for spam directory and its subdirectories
-        handle_permissions "$spam_dir"
-        handle_permissions "$spam_dir/new"
-        handle_permissions "$spam_dir/cur"
-        
-        # Start watch process with error redirection to pipe
-        (
-            set +e
-            # Ignore parent's signals
-            trap 'exit 0' SIGTERM SIGINT SIGHUP
-            exec 2>"$pipe"
-            inotifywait -m -e create -e moved_to --format '%w%f' "${spam_dir}"/{new,cur} | while read file; do
-                if [[ -f "$file" ]]; then
-                    log 0 "SPAM: New file detected: $file for $username"
-                    handle_permissions "$file"
-		    mark_email_as "spam" "$file"
-                fi
-            done
-        ) &
-        pid=$!
-        WATCH_PIDS["${username}_spam_${spam_count}"]=$pid
-        log 5 "Started spam watch for $username on $spam_dir (PID: $pid)"
-        ((spam_count++))
-    done < <(find "$maildir" -type d -regextype posix-extended -iregex "$SPAM_DIR_REGEX")
-
-    # Monitor pipe for errors from any watch process
-(
-    set +e
-    trap 'exit 0' SIGTERM SIGINT SIGHUP
-    while read -r message; do
-        # Filter out known inotifywait setup messages
-        if [[ "$message" != "Setting up watches." && "$message" != "Watches established." ]]; then
-            log 0 " Watch error for $username: $message"
-            # Instead of full recovery, restart only the affected user's watch
-            cleanup_mailbox_watches "$username"
-            setup_mailbox_watches "$username" "$maildir"
-        else
-            log 5 "$username: $message"
-        fi
-    done < "$pipe"
-) &
+    # Monitor pipe for errors from the watch process
+    (
+        set +e
+        trap 'exit 0' SIGTERM SIGINT SIGHUP
+        while read -r message; do
+            # Filter out known inotifywait setup messages
+            if [[ "$message" != "Setting up watches." && "$message" != "Watches established." ]]; then
+                log 0 " Watch error for $username: $message"
+                # Instead of full recovery, restart only the affected user's watch
+                cleanup_mailbox_watches "$username"
+                setup_mailbox_watches "$username" "$maildir"
+            else
+                log 5 "$username: $message"
+            fi
+        done < "$pipe"
+    ) &
     pid=$!
     WATCH_PIDS["${username}_monitor"]=$pid
     log 5 "Setup complete for $username"
@@ -133,7 +112,6 @@ setup_mailbox_watches() {
     MAILBOX_USERS[$username]="$maildir"
     return 0
 }
-
 # Cleanup watches for a mailbox or a specific process
 cleanup_mailbox_watches() {
     local target="$1"
@@ -313,8 +291,20 @@ mark_email_as() {
     local opposite_type=""
     log 5 "Entering mark_email_as: type_to_set=$type_to_set, email_file=$email_file"
 
+    # Resolve the Maildir filename before any file operation
+    email_file=$(resolve_maildir_filename "$email_file")
+    if [[ -z "$email_file" || ! -f "$email_file" ]]; then
+        log 0 "Email file $email_file does not exist. Skipping."
+        return 0
+    fi
+
     # Additional condition for spam type
     if [[ "$type_to_set" == "spam" ]]; then
+        email_file=$(resolve_maildir_filename "$email_file")
+        if [[ -z "$email_file" || ! -f "$email_file" ]]; then
+            log 0 "Email file $email_file does not exist. Skipping."
+            return 0
+        fi
         local x_spam_status=$(grep -i "^X-Spam-Status:" "$email_file")
         if [[ -n "$x_spam_status" && ! "$x_spam_status" =~ ^X-Spam-Status:\ No ]]; then
             log 0 "Email $email_file was already marked as spam."
@@ -327,33 +317,59 @@ mark_email_as() {
         log 0 "Invalid email type provided: $type_to_set. Must be either 'ham' or 'spam'."
         return 0
     fi
+
     # Check if the file has already been learned
-email_file=$(resolve_maildir_filename "$email_file")
+    email_file=$(resolve_maildir_filename "$email_file")
+    if [[ -z "$email_file" || ! -f "$email_file" ]]; then
+        log 0 "Email file $email_file does not exist. Skipping."
+        return 0
+    fi
     if getfattr -n "user.$type_to_set" -- "$email_file" &>/dev/null; then
         log 0 "Email $email_file has already been learned as $type_to_set. Skipping processing."
         return 0
     fi
 
     # Remove the opposite type attribute if it exists
-email_file=$(resolve_maildir_filename "$email_file")
+    email_file=$(resolve_maildir_filename "$email_file")
+    if [[ -z "$email_file" || ! -f "$email_file" ]]; then
+        log 0 "Email file $email_file does not exist. Skipping."
+        return 0
+    fi
     if getfattr -n "user.$opposite_type" -- "$email_file" &>/dev/null; then
-email_file=$(resolve_maildir_filename "$email_file")
+        email_file=$(resolve_maildir_filename "$email_file")
+        if [[ -z "$email_file" || ! -f "$email_file" ]]; then
+            log 0 "Email file $email_file does not exist. Skipping."
+            return 0
+        fi
         setfattr -x "user.$opposite_type" "$email_file"
         log 5 "Removed user.$opposite_type attribute from $email_file."
     fi
+
     log 0 "Processing $email_file as $type_to_set."
+
     # Use run_and_log to execute sa-learn and log its output
-    #run_and_log 0 sa-learn --$type_to_set "$email_file"
-email_file=$(resolve_maildir_filename "$email_file")
+    email_file=$(resolve_maildir_filename "$email_file")
+    if [[ -z "$email_file" || ! -f "$email_file" ]]; then
+        log 0 "Email file $email_file does not exist. Skipping."
+        return 0
+    fi
     if ! run_and_log 0 sa-learn --$type_to_set "$email_file"; then
         log 0 "Error processing $email_file with sa-learn. File may be inaccessible or corrupted."
         return 0
     fi
+
     # Set the attribute to mark the file as learned
-email_file=$(resolve_maildir_filename "$email_file")
-if setfattr -n "user.$type_to_set" -v "1" "$email_file" &>/dev/null; then
- log 5 "Added user.$type_to_set attribute from $email_file."
-fi
+    email_file=$(resolve_maildir_filename "$email_file")
+    if [[ -z "$email_file" || ! -f "$email_file" ]]; then
+        log 0 "Email file $email_file does not exist. Skipping."
+        return 0
+    fi
+    if setfattr -n "user.$type_to_set" -v "1" "$email_file" &>/dev/null; then
+        log 5 "Added user.$type_to_set attribute to $email_file."
+    else
+        log 0 "Failed to add user.$type_to_set attribute to $email_file."
+    fi
+
     return 0
 }
 
@@ -380,12 +396,11 @@ resolve_maildir_filename() {
         return 0
     fi
 
-    # If no renamed file is found, return nothing
+    # If no renamed file is found, return an empty string
     log 0 "File $original_file can no longer be found at this path"
-    echo 0
-    return 0
+    echo ""
+    return 1
 }
-
 
 
 # Set up signal handlers
