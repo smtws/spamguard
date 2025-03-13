@@ -376,7 +376,8 @@ mark_email_as() {
 resolve_maildir_filename() {
     local original_file="$1"
     local maildir_path
-    local renamed_file
+    local original_inode
+    local found_file
 
     # If the file still exists, return it as-is
     if [[ -f "$original_file" ]]; then
@@ -387,17 +388,29 @@ resolve_maildir_filename() {
     # Get the parent directory of the file
     maildir_path="$(dirname "$original_file")"
 
-    # Look for a renamed version of the file
-    renamed_file=$(ls "$maildir_path"/$(basename "$original_file" | cut -d':' -f1)* 2>/dev/null | head -n1)
+    # Get the inode of the original file (if it exists)
+    if original_inode=$(stat -c %i "$original_file" 2>/dev/null); then
+        # Search for a file with the same inode in the maildir directory
+        found_file=$(find "$maildir_path" -inum "$original_inode" -print -quit 2>/dev/null)
 
-    if [[ -n "$renamed_file" && -f "$renamed_file" ]]; then
-        log 0 "File $original_file was renamed to $renamed_file."
-        echo "$renamed_file"
+        if [[ -n "$found_file" && -f "$found_file" ]]; then
+            log 0 "File $original_file was renamed to $found_file (same inode: $original_inode)."
+            echo "$found_file"
+            return 0
+        fi
+    fi
+
+    # If no file with the same inode is found, fall back to the filename-based search
+    found_file=$(ls "$maildir_path"/$(basename "$original_file" | cut -d':' -f1)* 2>/dev/null | head -n1)
+
+    if [[ -n "$found_file" && -f "$found_file" ]]; then
+        log 0 "File $original_file was renamed to $found_file."
+        echo "$found_file"
         return 0
     fi
 
-    # If no renamed file is found, return an empty string
-    log 0 "File $original_file can no longer be found at this path"
+    # If no file is found, return an empty string
+    log 0 "File $original_file can no longer be found at this path."
     echo ""
     return 1
 }
@@ -439,4 +452,3 @@ if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
     set +e
     main "$@"
 fi
-

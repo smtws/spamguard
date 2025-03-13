@@ -8,7 +8,7 @@
 # 4 = trace
 # 5 = trace with data dumps
 LOG_LEVEL=${LOG_LEVEL:5}
-LOG_FILE="/var/log/sg_test.log"
+LOG_FILE="/var/log/spamguard.log"
 
 # Default base directory for mailbox search
 MAIL_BASE_DIR="${MAIL_BASE_DIR:-/home}"
